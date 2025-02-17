@@ -9,8 +9,9 @@ from io import BytesIO
 from anthropic import APIResponse
 from anthropic.types import ToolResultBlockParam
 from anthropic.types.beta import BetaMessage, BetaTextBlock, BetaToolUseBlock, BetaMessageParam, BetaUsage
-
-from agent.llm_utils.oaiclient import run_oai_interleaved
+# Local Qwen Addition
+from agent.llm_utils.vllm_qwen_interleaved import run_vllm_qwen_interleaved
+#
 from agent.llm_utils.groqclient import run_groq_interleaved
 from agent.llm_utils.utils import is_image_path
 import time
@@ -121,18 +122,17 @@ class VLMAgent:
             self.total_token_usage += token_usage
             self.total_cost += (token_usage * 0.99 / 1000000)
         elif "qwen" in self.model:
-            vlm_response, token_usage = run_oai_interleaved(
+            vlm_response, token_usage = run_vllm_qwen_interleaved(
                 messages=planner_messages,
                 system=system,
                 model_name=self.model,
                 api_key=self.api_key,
                 max_tokens=min(2048, self.max_tokens),
-                provider_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                temperature=0,
+                temperature=0
             )
             print(f"qwen token usage: {token_usage}")
             self.total_token_usage += token_usage
-            self.total_cost += (token_usage * 2.2 / 1000000)  # https://help.aliyun.com/zh/model-studio/getting-started/models?spm=a2c4g.11186623.0.0.74b04823CGnPv7#fe96cfb1a422a
+            self.total_cost += 0  # local inference is "free"
         else:
             raise ValueError(f"Model {self.model} not supported")
         latency_vlm = time.time() - start
@@ -209,89 +209,74 @@ class VLMAgent:
 
     def _get_system_prompt(self, screen_info: str = ""):
         main_section = f"""
-You are using a Windows device.
-You are able to use a mouse and keyboard to interact with the computer based on the given task and screenshot.
-You can only interact with the desktop GUI (no terminal or application menu access).
+You are using a Windows device. You can use a mouse and keyboard to interact with the desktop GUI (no terminal or application menu access). You may be given some history of plan/actions. Carefully consider these, along with the task and screenshot, to decide exactly one new action.
 
-You may be given some history plan and actions, this is the response from the previous loop.
-You should carefully consider your plan base on the task, screenshot, and history actions.
+Below is the list of bounding boxes by ID on the screen and their description:
+{screen_info}
 
-Here is the list of all detected bounding boxes by IDs on the screen and their description:{screen_info}
+**You must produce exactly one of these "Next Action" each time**:
+- "type": type a string of text into the current focus.
+- "left_click": move mouse to Box ID and left-click once.
+- "right_click": move mouse to Box ID and right-click once.
+- "double_click": move mouse to Box ID and double-click.
+- "hover": move mouse to Box ID (no click).
+- "scroll_up": scroll the screen up.
+- "scroll_down": scroll the screen down if content is out of view.
+- "wait": wait 1 second.
 
-Your available "Next Action" only include:
-- type: types a string of text.
-- left_click: move mouse to box id and left clicks.
-- right_click: move mouse to box id and right clicks.
-- double_click: move mouse to box id and double clicks.
-- hover: move mouse to box id.
-- scroll_up: scrolls the screen up to view previous content.
-- scroll_down: scrolls the screen down, when the desired button is not visible, or you need to see more content. 
-- wait: waits for 1 second for the device to load or respond.
-
-Based on the visual information from the screenshot image and the detected bounding boxes, please determine the next action, the Box ID you should operate on (if action is one of 'type', 'hover', 'scroll_up', 'scroll_down', 'wait', there should be no Box ID field), and the value (if the action is 'type') in order to complete the task.
-
-Output format:
+**Output format** (always valid JSON enclosed in triple backticks):
 ```json
 {{
-    "Reasoning": str, # describe what is in the current screen, taking into account the history, then describe your step-by-step thoughts on how to achieve the task, choose one action from available actions at a time.
-    "Next Action": "action_type, action description" | "None" # one action at a time, describe it in short and precisely. 
-    "Box ID": n,
-    "value": "xxx" # only provide value field if the action is type, else don't include value key
+  "Reasoning": "...",
+  "Next Action": "action_type or None",
+  "Box ID": 123,
+  "value": "... optional"
 }}
 ```
 
-One Example:
-```json
-{{  
-    "Reasoning": "The current screen shows google result of amazon, in previous action I have searched amazon on google. Then I need to click on the first search results to go to amazon.com.",
-    "Next Action": "left_click",
-    "Box ID": m
-}}
-```
+### Important Requirements
+1. **Single action**: Only give **one** action in `"Next Action"`.  
+2. **JSON only**: Return your response as **valid JSON** code block. No extra text outside it.  
+3. If the action is `"type"`, you must include `"value"` with the text to type. Otherwise, omit `"value"`.  
+4. If no Box ID is needed (e.g., scroll_down), either omit `"Box ID"` or set `"Box ID": null`.  
+5. When you are finished (i.e., no more actions needed), set `"Next Action": "None"`.  
+6. For any booleans or empty fields, use valid JSON (`null`, `true`, `false`) instead of Python `None`, `True`, `False`.  
+7. Do **not** insert `\nNext Action` or other partial JSON tokens inside the `"Reasoning"` string. Keep `"Reasoning"` a normal text string.
 
-Another Example:
-```json
-{{
-    "Reasoning": "The current screen shows the front page of amazon. There is no previous action. Therefore I need to type "Apple watch" in the search bar.",
-    "Next Action": "type",
-    "Box ID": n,
-    "value": "Apple watch"
-}}
-```
+**Examples**:
 
-Another Example:
 ```json
 {{
-    "Reasoning": "The current screen does not show 'submit' button, I need to scroll down to see if the button is available.",
-    "Next Action": "scroll_down",
+  "Reasoning": "The screen shows google search results. I want to click the first link to open Amazon.",
+  "Next Action": "left_click",
+  "Box ID": 0
 }}
 ```
 
-IMPORTANT NOTES:
-1. You should only give a single action at a time.
+```json
+{{
+  "Reasoning": "The screen shows Amazon's front page. I need to type \"Apple watch\" in the search bar.",
+  "Next Action": "type",
+  "Box ID": 2,
+  "value": "Apple watch"
+}}
+```
 
-"""
-        thinking_model = "r1" in self.model
-        if not thinking_model:
-            main_section += """
-2. You should give an analysis to the current screen, and reflect on what has been done by looking at the history, then describe your step-by-step thoughts on how to achieve the task.
+```json
+{{
+  "Reasoning": "I've found the item. There's nothing else to do.",
+  "Next Action": "None"
+}}
+```
 
+Remember:
+- **Only valid JSON** in triple backticks. 
+- No commentary outside the code block.
+- Use `null` for missing values, never Python `None`.
 """
-        else:
-            main_section += """
-2. In <think> XML tags give an analysis to the current screen, and reflect on what has been done by looking at the history, then describe your step-by-step thoughts on how to achieve the task. In <output> XML tags put the next action prediction JSON.
-
-"""
-        main_section += """
-3. Attach the next action prediction in the "Next Action".
-4. You should not include other actions, such as keyboard shortcuts.
-5. When the task is completed, don't complete additional actions. You should say "Next Action": "None" in the json field.
-6. The tasks involve buying multiple products or navigating through multiple pages. You should break it into subgoals and complete each subgoal one by one in the order of the instructions.
-7. avoid choosing the same action/elements multiple times in a row, if it happens, reflect to yourself, what may have gone wrong, and predict a different action.
-8. If you are prompted with login information page or captcha page, or you think it need user's permission to do the next action, you should say "Next Action": "None" in the json field.
-""" 
 
         return main_section
+
 
 def _remove_som_images(messages):
     for msg in messages:
