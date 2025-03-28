@@ -12,6 +12,7 @@ from anthropic.types.beta import BetaMessage, BetaTextBlock, BetaToolUseBlock, B
 # Local Qwen Addition
 from agent.llm_utils.vllm_qwen_interleaved import run_vllm_qwen_interleaved
 #
+from agent.llm_utils.oaiclient import run_oai_interleaved
 from agent.llm_utils.groqclient import run_groq_interleaved
 from agent.llm_utils.utils import is_image_path
 import time
