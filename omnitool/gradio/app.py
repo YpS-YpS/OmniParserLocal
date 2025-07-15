@@ -186,11 +186,40 @@ def chatbot_output_callback(message, chatbot_state, hide_images=False, sender="b
                         for user_msg, bot_msg in chatbot_state]
     # print(f"chatbot_output_callback chatbot_state: {concise_state} (truncated)")
 
+
+
 def valid_params(user_input, state):
     """Validate all requirements and return a list of error messages."""
     errors = []
     
-    for server_name, url in [('Windows Host', 'localhost:5000'), ('OmniParser Server', args.omniparser_server_url)]:
+    for server_name, url in [('Windows Host', '192.168.50.231:5000'), ('OmniParser Server', args.omniparser_server_url)]:
+        try:
+            url = f'http://{url}/probe'
+            print(f"Testing connection to {server_name} at {url}")
+            response = requests.get(url, timeout=3)
+            print(f"Response from {server_name}: {response.status_code}")
+            if response.status_code != 200:
+                errors.append(f"{server_name} is not responding")
+        except RequestException as e:
+            print(f"Error connecting to {server_name}: {str(e)}")
+            errors.append(f"{server_name} is not responding")
+    
+    if not state["api_key"].strip():
+        errors.append("LLM API Key is not set")
+
+    if not user_input:
+        errors.append("no computer use request provided")
+    
+    return errors
+
+
+
+
+'''def valid_params(user_input, state):
+    """Validate all requirements and return a list of error messages."""
+    errors = []
+    
+    for server_name, url in [('Windows Host', '192.168.50.231:5000'), ('OmniParser Server', args.omniparser_server_url)]:
         try:
             url = f'http://{url}/probe'
             response = requests.get(url, timeout=3)
@@ -205,7 +234,7 @@ def valid_params(user_input, state):
     if not user_input:
         errors.append("no computer use request provided")
     
-    return errors
+    return errors'''
 
 def process_input(user_input, state):
     # Reset the stop flag
@@ -302,7 +331,7 @@ with gr.Blocks(theme=gr.themes.Default()) as demo:
             with gr.Column():
                 model = gr.Dropdown(
                     label="Model",
-                    choices=["omniparser + gpt-4o", "omniparser + o1", "omniparser + o3-mini", "omniparser + R1", "omniparser + qwen2.5vl", "claude-3-5-sonnet-20241022"],
+                    choices=["omniparser + gpt-4o", "omniparser + o1", "omniparser + o3-mini", "omniparser + R1", "omniparser + qwen2.5vl", "claude-3-5-sonnet-20241022", "omniparser + gpt-4o-orchestrated", "omniparser + o1-orchestrated", "omniparser + o3-mini-orchestrated", "omniparser + R1-orchestrated", "omniparser + qwen2.5vl-orchestrated"],
                     value="omniparser + gpt-4o",
                     interactive=True,
                 )
@@ -341,11 +370,11 @@ with gr.Blocks(theme=gr.themes.Default()) as demo:
             stop_button = gr.Button(value="Stop", variant="secondary")
 
     with gr.Row():
-        with gr.Column(scale=1):
+        with gr.Column(scale=2):
             chatbot = gr.Chatbot(label="Chatbot History", autoscroll=True, height=580)
         with gr.Column(scale=3):
             iframe = gr.HTML(
-                f'<iframe src="http://{args.windows_host_url}/vnc.html?view_only=1&autoconnect=1&resize=scale" width="100%" height="580" allow="fullscreen"></iframe>',
+                f'<iframe src="http://192.168.50.231:5800" width="100%" height="580" allow="fullscreen"></iframe>',
                 container=False,
                 elem_classes="no-padding"
             )
@@ -356,7 +385,7 @@ with gr.Blocks(theme=gr.themes.Default()) as demo:
         
         if model_selection == "claude-3-5-sonnet-20241022":
             provider_choices = [option.value for option in APIProvider if option.value != "openai"]
-        elif model_selection in set(["omniparser + gpt-4o", "omniparser + o1", "omniparser + o3-mini"]):
+        elif model_selection in set(["omniparser + gpt-4o", "omniparser + o1", "omniparser + o3-mini", "omniparser + gpt-4o-orchestrated", "omniparser + o1-orchestrated", "omniparser + o3-mini-orchestrated"]):
             provider_choices = ["openai"]
         elif model_selection == "omniparser + R1":
             provider_choices = ["groq"]
